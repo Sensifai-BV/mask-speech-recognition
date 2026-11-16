@@ -6,8 +6,7 @@ The code base does four things around NVIDIA's cache-aware streaming recogniser 
 
 1. **Model coverings.** It provides parametric presets, and measured responses from Cox et al. (2022) with empirical and bounded-PCA samplers.
 2. **Build corpora.** It builds speaker-disjoint training and test corpora with literature-based workshop noise levels and A-weighted SNR.
-3. **Adapt the recogniser.** It trains encoder adapters in NeMo on a CUDA machine and runs them on a Mac through 🤗 Transformers.
-4. **Analyse coverings.** It asks how much of a covering's damage is a linear filter, using the oracle-filter study with reading-to-reading and recognition-fitted controls.
+3. **Analyse coverings.** It asks how much of a covering's damage is a linear filter, using the oracle-filter study with reading-to-reading and recognition-fitted controls.
 
 ---
 

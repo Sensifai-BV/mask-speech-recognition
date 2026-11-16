@@ -1,0 +1,36 @@
+# Training dependencies for the masked-speech fine-tune (Linux + CUDA).
+#
+# torch/torchaudio are NOT here: they must come from the CUDA-specific wheel
+# index, which varies by card (cu126 for RTX 30/40, cu128 for RTX 50). The
+# install script handles those separately:
+#
+#     pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+#     pip install -r requirements.txt
+#
+# Pinned to a NeMo commit rather than @main so a rerun months from now installs
+# what was tested, not whatever main has become. Bump deliberately.
+
+# Build prerequisites — NeMo compiles Cython extensions during install, so
+# these have to be present before it is resolved.
+Cython>=3.0
+packaging>=23.0
+
+# The toolkit. [asr] pulls in the transducer losses, dataloaders and metrics.
+nemo_toolkit[asr] @ git+https://github.com/NVIDIA/NeMo.git@v2.6.0
+
+# The CUDA transducer loss. NeMo's default loss (warprnnt_numba) is a Numba
+# CUDA kernel; without this, training falls back to the pure-Python lattice
+# loop that NVIDIA marks "for debugging purposes only".
+numba>=0.60.0
+
+# Audio I/O for the dataloader and for our own dataset scripts.
+soundfile>=0.12.1
+librosa>=0.10.0
+scipy>=1.11.0
+numpy>=1.24.0
+
+# Config, logging, progress.
+omegaconf>=2.3.0
+hydra-core>=1.3.0
+lightning>=2.2.0
+tensorboard>=2.15.0

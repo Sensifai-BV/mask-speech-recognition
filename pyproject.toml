@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "muffled-asr"
+version = "0.1.0"
+description = "Streaming speech recognition through face masks, shields and welding helmets: covering simulation, measured responses, encoder adapters and the oracle-filter study"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "soundfile>=0.12",
+    "pandas>=2.0",
+    "jiwer>=3.0",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+# Mac/CPU inference and WER scoring with the Transformers port of Nemotron
+infer = ["torch>=2.6", "transformers>=5.13", "safetensors", "librosa>=0.10", "huggingface-hub>=0.24"]
+# live microphone tools (inference GUI, mic tests, real-mic SLU test)
+audio = ["sounddevice>=0.5"]
+# NeMo training on Linux + CUDA: use src/muffled_asr/training/install_cuda.sh (pins torch for your card)
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"muffled_asr.training" = ["conf/*.yaml", "*.sh", "requirements.txt", "README.md"]
+"muffled_asr.measurement" = ["*.sh"]

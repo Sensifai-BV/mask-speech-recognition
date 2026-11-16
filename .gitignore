@@ -1,0 +1,26 @@
+# data, weights and run outputs live under ROOT but never in git
+/datasets/
+/models/
+/experiments/
+/results/
+/reports/
+/release/
+/nemo/
+/examples/
+
+*.pt
+*.ckpt
+*.nemo
+*.safetensors
+*.onnx
+*.wav
+*.flac
+*.npz
+
+__pycache__/
+*.pyc
+*.egg-info/
+.venv*/
+.numba_cache/
+.DS_Store
+.idea/

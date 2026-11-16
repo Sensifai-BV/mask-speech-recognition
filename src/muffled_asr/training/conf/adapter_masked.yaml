@@ -1,0 +1,127 @@
+# Encoder-adapter training on masked + noisy speech.
+#
+# Deliberately NOT NeMo's examples/asr/conf/asr_adapters/asr_adaptation.yaml.
+# That config is written for the legacy dataloader, while this checkpoint stores
+# a Lhotse-style data config, and NeMo's train_asr_adapter.py reconciles the two
+# by dropping every key the stored config lacks (whitelisting only num_workers
+# and pin_memory). batch_size is not in the stored config, so it gets dropped,
+# and the legacy loader then fails with "Missing key batch_size".
+#
+# adapter_masked.py passes these sections straight to the model instead.
+
+name: "nemotron_welding_adapter"
+
+init_from_nemo_model: ???
+
+gpu_mem_fraction: null      # cap VRAM share; leaves room for a laptop display
+
+model:
+  sample_rate: 16000
+
+  # The RNN-T joint materialises a [B, T, U, V] tensor AND its gradient, which
+  # is the largest allocation in the run and what OOMs an 8 GB card inside
+  # rnnt_pytorch.py's `torch.zeros_like(acts)`.
+  #
+  # The base checkpoint already ships fuse_loss_wer: true with fused_batch_size: 4,
+  # so fusion is not the missing piece -- the OOM happened with it on. What
+  # matters is the sub-batch width: the joint is computed in chunks of
+  # fused_batch_size, so 1 gives the smallest peak. Setting it equal to
+  # train_ds.batch_size would mean one chunk, i.e. no splitting at all.
+  fuse_loss_wer: true
+  fused_batch_size: 1
+
+  # The checkpoint ships log_prediction: true, which prints a reference and a
+  # prediction every time WER is computed -- thousands of lines per epoch.
+  log_prediction: false
+
+  adapter:
+    name: "welding"
+    module: "encoder"       # acoustics live here; decoder/joint model language
+    dim: 32                 # NeMo: "16 to 32 is generally enough"
+    dropout: 0.1
+    in_features: 1024       # encoder d_model; adapter_masked.py checks this
+    state_dict_name: "adapters.pt"
+
+  train_ds:
+    manifest_filepath: ???
+    sample_rate: 16000
+    batch_size: 2
+    shuffle: true
+    num_workers: 2          # fewer worker processes and prefetched batches
+    pin_memory: false      # avoid extra page-locked host buffers on the laptop
+    max_duration: 16.0
+    min_duration: 0.5
+    use_lhotse: false       # legacy loader: the one that takes batch_size
+    is_tarred: false
+
+  validation_ds:
+    manifest_filepath: ???
+    sample_rate: 16000
+    batch_size: 2
+    shuffle: false
+    num_workers: 0          # validation runs in the main process
+    pin_memory: false
+    use_lhotse: false
+
+  # Modest augmentation. NeMo disables it for adapters because adaptation sets
+  # are usually tiny; ours is 74 h and the point is robustness, so keep some.
+  spec_augment:
+    _target_: nemo.collections.asr.modules.SpectrogramAugmentation
+    freq_masks: 2
+    time_masks: 5
+    freq_width: 27
+    time_width: 0.05
+
+  optim:
+    name: adamw
+    lr: 1e-3                # adapters are fresh modules, so higher than a finetune
+    betas: [0.9, 0.98]
+    weight_decay: 0.0       # NeMo's adapter baseline
+    sched:
+      name: CosineAnnealing
+      warmup_steps: 200
+      warmup_ratio: null
+      min_lr: 1e-5
+
+trainer:
+  devices: 1
+  num_nodes: 1
+  accelerator: gpu
+  strategy: auto
+  max_steps: 3000
+  max_epochs: -1
+  accumulate_grad_batches: 8
+  precision: bf16-mixed
+  gradient_clip_val: 1.0
+  val_check_interval: 4000   # batches; run_adapter.sh sets steps x accum
+  check_val_every_n_epoch: null   # validate on a step interval, not per epoch
+  limit_val_batches: 1.0
+  log_every_n_steps: 25
+  enable_progress_bar: true
+  num_sanity_val_steps: 0
+  enable_checkpointing: false
+  logger: false
+  benchmark: false
+
+exp_manager:
+  exp_dir: experiments
+  name: ${name}
+  create_tensorboard_logger: true
+  create_checkpoint_callback: true
+  checkpoint_callback_params:
+    monitor: "val_wer"
+    mode: "min"
+    save_top_k: 1
+    save_last: true              # what resume_if_exists looks for
+    save_weights_only: false     # resume needs optimizer state
+    # Adapter optimizer state is small. Disable the distributed-checkpoint
+    # pruning path; it may reload/rewrite models and is unnecessary here.
+    save_last_n_optim_states: -1
+    always_save_nemo: false      # re-tars the whole model at every save
+    # At train end, restore the lowest-val_wer checkpoint before exporting the
+    # .nemo (and before adapters.pt is written). Default is False, which
+    # exports whatever the final step happened to be.
+    save_best_model: true
+  resume_if_exists: true
+  resume_ignore_no_checkpoint: true
+  create_wandb_logger: false

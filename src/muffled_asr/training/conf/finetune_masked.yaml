@@ -1,0 +1,138 @@
+# Fine-tune nemotron-speech-streaming-en-0.6b on masked speech.
+# Sized for a single consumer RTX card (24 GB). See README.md for the knobs.
+
+name: "nemotron_masked_finetune"
+
+# Path to the .nemo checkpoint. Overridden on the command line by run_finetune.sh.
+init_from_nemo_model: ???
+
+# Cap the share of VRAM this process may allocate, 0.0-1.0, or null for no cap.
+# On a laptop the same GPU drives the display: if training takes all 8 GB the
+# desktop has nowhere to go, and the whole machine can lock up rather than
+# raising a clean OOM. Reserving ~20% keeps the failure inside Python.
+gpu_mem_fraction: null
+
+# CUDA graphs speed up RNN-T greedy decoding but capture a large static buffer.
+# Decoding during training is incidental (it only feeds the WER metric), so the
+# capture buys nothing and, on a small card, is enough to OOM at the first epoch
+# boundary — after a full epoch of training has already succeeded.
+cuda_graph_decoder: false
+
+model:
+  sample_rate: 16000
+
+  # Not part of NeMo's stock finetune config — read by finetune_masked.py and
+  # applied to the restored joint, because Hydra cannot reach it otherwise.
+  fuse_loss_wer: true
+  fused_batch_size: 4       # lower if you still OOM; 1 is valid
+  freeze_encoder: false     # true = decoder+joint only, far cheaper, use under ~10 h of data
+
+  train_ds:
+    manifest_filepath: ???
+    sample_rate: ${model.sample_rate}
+    batch_size: 4           # with accumulate_grad_batches: 4 -> effective 16
+    shuffle: true
+    num_workers: 8          # lower to 2 on a laptop: each worker is a process
+    pin_memory: true
+    max_duration: 16.0      # 20.0 is NeMo's default; 16 trades a few clips for headroom
+    min_duration: 0.5
+    is_tarred: false
+    bucketing_strategy: "fully_randomized"
+
+  validation_ds:
+    manifest_filepath: null   # optional; without it no epoch can be ranked
+    sample_rate: ${model.sample_rate}
+    batch_size: 4
+    shuffle: false
+    use_start_end_token: false
+    num_workers: 4
+    pin_memory: true
+
+  # Keep the pre-trained tokenizer. Replacing it reinitialises the joint and
+  # throws away everything the model knows about English.
+  tokenizer:
+    update_tokenizer: false
+    dir: null
+    type: bpe
+
+  char_labels:
+    update_labels: false
+    labels: null
+
+  # Main regulariser. Leave it on — masked data is narrow, and this is what
+  # stops the model memorising the filter instead of learning robustness.
+  spec_augment:
+    _target_: nemo.collections.asr.modules.SpectrogramAugmentation
+    freq_masks: 2
+    time_masks: 10
+    freq_width: 27
+    time_width: 0.05
+
+  optim:
+    name: adamw
+    lr: 1e-5                # NeMo's stock finetune config says 1e-4. That is for
+                            # adapting a generic base; at 1e-4 a 600M model on a
+                            # small set forgets English within a few hundred steps.
+    betas: [0.9, 0.98]
+    weight_decay: 1e-3
+    sched:
+      name: CosineAnnealing
+      # Rule of thumb: ~5% of total optimizer steps, and never more than one
+      # epoch. With 11.5k utterances at batch 4 x accum 4 that is ~716 steps
+      # per epoch, so stock's 5000 would warm up for seven epochs and even 1000
+      # would still be ramping in epoch 2. Raise this for a much larger corpus.
+      warmup_steps: 200
+      warmup_ratio: null
+      min_lr: 1e-7
+
+trainer:
+  devices: 1
+  num_nodes: 1
+  accelerator: gpu
+  strategy: auto            # single card; DDP only helps with devices > 1
+  max_epochs: 10
+  max_steps: -1
+  accumulate_grad_batches: 4
+  precision: bf16-mixed     # Ampere and newer. Use 16-mixed on older cards.
+  gradient_clip_val: 1.0    # transducer gradients spike; stock 0.0 disables clipping
+  val_check_interval: 1.0
+  check_val_every_n_epoch: 1
+  limit_val_batches: 1.0    # must exist here; run_finetune.sh sets 0 for --no-val
+  log_every_n_steps: 25
+  enable_progress_bar: true
+  num_sanity_val_steps: 1
+  sync_batchnorm: false
+  enable_checkpointing: false   # exp_manager owns this
+  logger: false                 # exp_manager owns this
+  benchmark: false              # must stay false: variable-length audio
+
+exp_manager:
+  exp_dir: null
+  name: ${name}
+  create_tensorboard_logger: true
+  create_checkpoint_callback: true
+  checkpoint_callback_params:
+    monitor: "val_wer"
+    mode: "min"
+    save_top_k: 3
+    # NOT always_save_nemo. That re-exports a full ~2.4 GB .nemo tarball on every
+    # improvement, copying the previous one aside first and deleting it after —
+    # roughly 5 GB of disk churn plus a CPU-side serialization of the whole model,
+    # at every epoch boundary. On a laptop that is a multi-minute stall.
+    # NeMo's save_nemo_on_train_end defaults to True, so the .nemo is still
+    # exported once, at the end, which is the copy you actually want.
+    always_save_nemo: false
+    # Both of these are rewritten by run_finetune.sh for --no-val. They must be
+    # present here regardless: Hydra configs are structs and cannot gain keys.
+    save_on_train_epoch_end: false
+    save_last: true             # the -last.ckpt that resume_if_exists looks for
+  # Stop when validation WER stops improving rather than burning the full 10 epochs.
+  create_early_stopping_callback: true
+  early_stopping_callback_params:
+    monitor: "val_wer"
+    mode: "min"
+    patience: 3
+    min_delta: 0.001
+  resume_if_exists: true
+  resume_ignore_no_checkpoint: true
+  create_wandb_logger: false
